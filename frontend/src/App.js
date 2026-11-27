@@ -3,10 +3,6 @@ import axios from "axios";
 import { useState } from "react";
 import * as XLSX from "xlsx";
 
-const API_BASE_URL = (
-    process.env.REACT_APP_API_URL || "http://localhost:5000"
-).replace(/\/+$/, "");
-
 function App() {
 
     const [msg, setmsg] = useState("");
@@ -111,7 +107,7 @@ function App() {
         try {
 
             const response = await axios.post(
-                `${API_BASE_URL}/sendemail`,
+                "/api/sendemail",
                 {
                     msg: msg,
                     emailList: emailList

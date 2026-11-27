@@ -54,7 +54,7 @@ const credential = mongoose.model(
 );
 
 
-app.post("/sendemail", async function (req, res) {
+app.post("/api/sendemail", async function (req, res) {
     try {
         console.log("Send email request received");
 
