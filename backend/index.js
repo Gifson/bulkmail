@@ -1,39 +1,52 @@
+
 const dns = require("dns");
 
 if (!process.env.VERCEL) {
     dns.setServers(["8.8.8.8", "8.8.4.4"]);
 }
 
+const path = require("path");
+require("dotenv").config({
+    path: path.join(__dirname, ".env")
+});
 
 const express = require("express");
 const cors = require("cors");
 const nodemailer = require("nodemailer");
 const mongoose = require("mongoose");
-require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// MongoDB Atlas connection
+// MongoDB connection
 const mongoUri = process.env.MONGODB_URI;
+
 if (!mongoUri) {
-    throw new Error("MONGODB_URI must be configured in backend/.env or the deployment environment");
+    throw new Error("MONGODB_URI is missing from environment variables");
 }
 
-mongoose.connect(mongoUri)
-    .then(function () {
-        console.log("Connected to MongoDB Atlas");
+let connectionPromise = null;
 
-        app.listen(process.env.PORT || 5000, function () {
-            console.log("Server Started....");
-        });
-    })
-    .catch(function (error) {
-        console.error("Failed to connect to MongoDB:", error.message);
-        process.exitCode = 1;
-    });
+async function connectDB() {
+    if (mongoose.connection.readyState === 1) {
+        return;
+    }
+
+    if (!connectionPromise) {
+        connectionPromise = mongoose.connect(mongoUri)
+            .then(() => {
+                console.log("Connected to MongoDB Atlas");
+            })
+            .catch((error) => {
+                connectionPromise = null;
+                throw error;
+            });
+    }
+
+    await connectionPromise;
+}
 
 // MongoDB credential model
 const credentialSchema = new mongoose.Schema({
@@ -53,14 +66,22 @@ const credential = mongoose.model(
     "bulkmail"
 );
 
-
-app.post("/api/sendemail", async function (req, res) {
+// Email sending route
+app.post("/api/sendemail", async (req, res) => {
     try {
         console.log("Send email request received");
 
+        // Connect to MongoDB before querying
+        await connectDB();
+
         const { msg, emailList } = req.body;
 
-        if (!msg || !Array.isArray(emailList) || emailList.length === 0) {
+        if (
+            !msg ||
+            typeof msg !== "string" ||
+            !Array.isArray(emailList) ||
+            emailList.length === 0
+        ) {
             return res.status(400).json({
                 success: false,
                 message: "Message and email list are required"
@@ -73,10 +94,10 @@ app.post("/api/sendemail", async function (req, res) {
         console.log("Gmail user:", data?.user);
         console.log("Password exists:", !!data?.pass);
 
-        if (!data) {
+        if (!data || !data.user || !data.pass) {
             return res.status(404).json({
                 success: false,
-                message: "Gmail credentials not found in database"
+                message: "Valid Gmail credentials not found"
             });
         }
 
@@ -91,31 +112,58 @@ app.post("/api/sendemail", async function (req, res) {
         await transporter.verify();
 
         console.log("Gmail authentication successful");
-
         console.log("Sending emails...");
 
-        for (let i = 0; i < emailList.length; i++) {
+        let sentCount = 0;
+
+        for (const email of emailList) {
+            if (
+                typeof email !== "string" ||
+                !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+            ) {
+                console.log("Skipping invalid email:", email);
+                continue;
+            }
+
             await transporter.sendMail({
                 from: data.user,
-                to: emailList[i],
+                to: email.trim(),
                 subject: "A message from Kipss",
                 text: msg
             });
 
-            console.log("Email sent to:", emailList[i]);
+            sentCount++;
+            console.log("Email sent to:", email);
         }
 
-        return res.json({
+        return res.status(200).json({
             success: true,
-            message: "All emails sent successfully"
+            message: "Emails sent successfully",
+            sentCount
         });
 
     } catch (error) {
-        console.log("Email error:", error);
+        console.error("Email error:", error);
 
         return res.status(500).json({
             success: false,
-            message: error.message
+            message: error.message || "Internal server error"
         });
     }
 });
+
+// Local development only
+if (!process.env.VERCEL) {
+    connectDB()
+        .then(() => {
+            app.listen(process.env.PORT || 5000, () => {
+                console.log("Server Started....");
+            });
+        })
+        .catch((error) => {
+            console.error("Database connection failed:", error);
+        });
+}
+
+// Export Express app for Vercel
+module.exports = app;
